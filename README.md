@@ -28,7 +28,7 @@ EMAIL="12345678@gmail.com"
 # Zone ID (Go to Cloudflare, click on the corresponding domain, and then click on Overview to find the ID on the bottom right)
 ZONE_ID="aabbccddeeffgghhllmm"
 # Domain to be resolved (e.g., gmail.com or www.gmail.com)
-DOMAIN="www.google.top"
+DOMAIN="www.google.com"
 # IP type (A/AAAA)
 TYPE="AAAA"
 DAYS_TO_KEEP=7

@@ -24,7 +24,7 @@ EMAIL="12345678@gmail.com"
 #区域ID（进入cloudflare，点击对应域名，再点击概述右下侧获取）
 ZONE_ID="aabbccddeeffgghhllmm"
 #要解析的域名（gmail.com or www.gmail.com）
-DOMAIN="www.google.top"
+DOMAIN="www.google.com"
 # ip类型(A/AAAA)
 TYPE="AAAA"
 DAYS_TO_KEEP=7

@@ -7,7 +7,7 @@ TOKEN=""
 EMAIL=""
 #区域ID（进入cloudflare，点击对应域名，再点击概述右下侧获取）
 ZONE_ID=""
-#要解析的域名（）
+#要解析的域名（www.google.com or google.com）
 DOMAIN=""
 # ip类型(A/AAAA)
 TYPE="AAAA"
