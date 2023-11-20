@@ -39,4 +39,6 @@ crontab -e
 */5 * * * * /opt/script/cloudflare_ddns/cloudflare_ddns.sh>/dev/null 2>&1
 ```
 ## 3.注意
-- 要解析的域名必须已经存在
+- 要解析的<font color=red>**域名必须已经存在**</font>
+- 运行前请检测是否含有<font color=red>**curl**</font>命令和<font color=red>**jq**</font>命令
+- 部分系统可能会出现curl命令使用异常（出现找不到证书的问题,openwrt可使用opkg install --force-reinstall ca-bundle修复)
