@@ -9,14 +9,12 @@ EMAIL=""
 ZONE_ID=""
 #要解析的域名（www.google.com or google.com）
 DOMAIN=""
-# ip类型(A/AAAA)
-TYPE="AAAA"
-# 日志保留天数
-DAYS_TO_KEEP=7
 
+CDN_PROXIED=false # 是否开启小黄云cdn加速
+TYPE="AAAA"  # ip类型(A/AAAA)
 LOG_DIR="$SCRIPT_DIR/log"
 NOW_IP_FILE="$SCRIPT_DIR/data.json"
-
+DAYS_TO_KEEP=7
 
 # 创建日志目录
 create_log_directory() {
@@ -120,13 +118,15 @@ main() {
     --data-raw '{
       \"content\": \"$IP\",
       \"name\": \"$DOMAIN\",
-      \"proxied\": false,
+      \"proxied\": $CDN_PROXIED,
       \"type\": \"$TYPE\",
       \"comment\": \"$(date)\",
       \"ttl\": 60
     }'"
 
+    # 执行curl命令，并将结果保存到变量
     local response=$(eval "$curl_command")
+    # 解析JSON数据
     local success=$(echo "$response" | jq -r '.success')
 
     # 写入日志

@@ -45,6 +45,7 @@ crontab -e
 
 
 3. Attention
-The <font color=red>domain to be resolved must already exist</font>.
-Before running, please check if the <font color=red>curl</font> and <font color=red>jq</font> commands are available.
-Some systems may encounter issues with the curl command (such as certificate not found issues; for OpenWRT, you can use opkg install --force-reinstall ca-bundle to fix it).
+- The <font color=red>domain to be resolved must already exist</font>.
+- Before running, please check if the <font color=red>curl</font> and <font color=red>jq</font> commands are available.
+- Some systems may encounter issues with the curl command (such as certificate not found issues; for OpenWRT, you can use opkg install --force-reinstall ca-bundle to fix it).
+- Since only the IP address and domain name have changed before updating the DNS record, if other configurations are modified, delete the data.json file and restart the script again

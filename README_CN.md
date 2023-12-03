@@ -42,3 +42,4 @@ crontab -e
 - 要解析的<font color=red>**域名必须已经存在**</font>
 - 运行前请检测是否含有<font color=red>**curl**</font>命令和<font color=red>**jq**</font>命令
 - 部分系统可能会出现curl命令使用异常（出现找不到证书的问题,openwrt可使用opkg install --force-reinstall ca-bundle修复)
+- 因更新解析记录前只判断了ip和域名是否变化，若修改了其他配置，请删除data.json文件再次重启脚本
