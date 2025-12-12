@@ -1,20 +1,21 @@
 #!/bin/bash
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-#进入https://dash.cloudflare.com/profile/api-tokens获取（填的是API Token，中文叫API令牌，别填了下面的API Key，需要授予token DNS修改权限、ZONE和Zone Settings 读权限）
-TOKEN=""
-#登录cloudflare的邮箱
-EMAIL=""
-#区域ID（进入cloudflare，点击对应域名，再点击概述右下侧获取）
-ZONE_ID=""
-#要解析的域名（www.google.com or google.com）
-DOMAIN=""
-
+# 配置部分 - 只需要设置这些参数
+TOKEN="xxxxxxxx"
+DOMAIN="xx.xxx.com"
+NETWORK_INTERFACE=""  # 网卡名称，不指定则使用系统默认路由
 CDN_PROXIED=false # 是否开启小黄云cdn加速
 TYPE="AAAA"  # ip类型(A/AAAA)
+
+# 其他配置（无需修改）
 LOG_DIR="$SCRIPT_DIR/log"
 NOW_IP_FILE="$SCRIPT_DIR/data.json"
 DAYS_TO_KEEP=7
+
+# 自动获取的参数
+ZONE_ID=""  # 将通过API自动获取
+RECORD_ID=""  # 将通过API自动获取
 
 # 创建日志目录
 create_log_directory() {
@@ -29,30 +30,88 @@ create_log_file() {
   LOG_FILE="$LOG_DIR/modification_log_$current_date.log"
   touch "$LOG_FILE"
 }
-
+# 写入日志
+write_log() {
+  local log_message="$1"
+  echo -e "$log_message" >> "$LOG_FILE"
+  echo -e "$log_message"
+}
 # 获取当前IP地址
 get_current_ip() {
-  local ip_command=""
+  local ip_command="curl -s"
+  # 只有当NETWORK_INTERFACE不为空时，才添加--interface参数
+  if [ -n "$NETWORK_INTERFACE" ]; then
+    ip_command="$ip_command --interface $NETWORK_INTERFACE"
+  fi
+  # 添加IP类型参数
   if [ "$TYPE" == "A" ]; then
-    ip_command="curl -s -4 ifconfig.me/ip"
+    ip_command="$ip_command -4 ifconfig.me/ip"
   elif [ "$TYPE" == "AAAA" ]; then
-    ip_command="curl -s -6 ifconfig.me/ip"
+    ip_command="$ip_command -6 ifconfig.me/ip"
   else
     echo "Invalid IP type specified. Use 'A' or 'AAAA'."
     exit 1
   fi
 
-  $ip_command
+  local ip=$($ip_command)
+
+  # 验证IP地址格式
+  if [ "$TYPE" == "A" ]; then
+    # 验证IPv4地址
+    if ! [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+      write_log "Invalid IPv4 address: $ip"
+      return 1
+    fi
+  elif [ "$TYPE" == "AAAA" ]; then
+    # 验证IPv6地址
+    if ! [[ $ip =~ ^([0-9a-fA-F]{0,4}:){1,7}([0-9a-fA-F]{0,4})$ ]]; then
+      write_log "Invalid IPv6 address: $ip"
+      return 1
+    fi
+  fi
+  echo $ip
+  return 0
 }
 
-# 获取域名id
-get_domain_id() {
-  local response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" \
-    -H "X-Auth-Email:$EMAIL" \
+# 提取根域名（用于匹配Zone）
+extract_root_domain() {
+  local domain="$1"
+  # 提取域名的最后两部分作为根域名（例如：git.aisdanny.top -> aisdanny.top）
+  local root_domain=$(echo "$domain" | awk -F. '{print $(NF-1) "." $NF}')
+  echo "$root_domain"
+}
+
+# 自动获取ZONE_ID
+get_zone_id() {
+  local root_domain=$(extract_root_domain "$DOMAIN")
+  local response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json")
-  local domain_id=$(echo "$response" | jq -r ".result[] | select(.name == \"$DOMAIN\" and .type == \"$TYPE\") | .id")
-  echo "$domain_id"
+  local zone_id=$(echo "$response" | jq -r ".result[] | select(.name == \"$root_domain\" or .name == \"$DOMAIN\") | .id")
+
+  if [ -z "$zone_id" ]; then
+    write_log "Error: Could not find Zone ID for domain $DOMAIN"
+    exit 1
+  fi
+
+  echo "$zone_id"
+}
+
+# 获取域名记录ID
+get_record_id() {
+  local zone_id="$1"
+  local response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-urlencode "name=$DOMAIN" \
+    --data-urlencode "type=$TYPE")
+  local record_id=$(echo "$response" | jq -r ".result[0].id")
+
+  if [ -z "$record_id" ] || [ "$record_id" == "null" ]; then
+    write_log "Error: Could not find DNS record for $DOMAIN (type: $TYPE)"
+    exit 1
+  fi
+  echo "$record_id"
 }
 
 # 从JSON文件中读取之前保存的IP地址和域名
@@ -68,14 +127,8 @@ get_previous_data() {
 write_data() {
   local ip="$1"
   local domain="$2"
-  echo "{\"ip\":\"$ip\",\"domain\":\"$domain\"}" > "$NOW_IP_FILE"
-}
-
-# 写入日志
-write_log() {
-  local log_message="$1"
-  echo "$log_message" >> "$LOG_FILE"
-  echo "$log_message"
+  local timestamp=$(date +"%Y-%m-%d %T")
+  echo "{\"ip\":\"$ip\",\"domain\":\"$domain\",\"timestamp\":\"$timestamp\"}" > "$NOW_IP_FILE"
 }
 
 # 清理旧日志，保留最近7天
@@ -95,11 +148,24 @@ cleanup_old_logs() {
   done
 }
 
+# 获取所有必要的Cloudflare参数（ZONE_ID和RECORD_ID）
+get_cloudflare_params() {
+  echo "Getting Cloudflare parameters for domain: $DOMAIN"
+  # 获取ZONE_ID
+  ZONE_ID=$(get_zone_id)
+  echo "Successfully obtained ZONE_ID: $ZONE_ID"
+  # 使用ZONE_ID获取RECORD_ID
+  RECORD_ID=$(get_record_id "$ZONE_ID")
+  echo "Successfully obtained RECORD_ID: $RECORD_ID"
+}
+
 # 执行一次主要功能
 main() {
   create_log_directory
 
-  local IP=$(get_current_ip)
+  if ! IP=$(get_current_ip); then
+      return 1
+  fi
   local PREVIOUS_DATA=$(get_previous_data)
   local PREVIOUS_IP=$(echo "$PREVIOUS_DATA" | jq -r '.ip')
   local PREVIOUS_DOMAIN=$(echo "$PREVIOUS_DATA" | jq -r '.domain')
@@ -109,10 +175,11 @@ main() {
     echo "IP address and domain have not changed. Skipping modification."
   else
     create_log_file
-    DOMAIN_ID=$(get_domain_id)
+    # 获取Cloudflare参数
+    get_cloudflare_params
+
     # 构建curl命令
-    local curl_command="curl -s --location --request PUT 'https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DOMAIN_ID' \
-    --header 'X-Auth-Email: $EMAIL' \
+    local curl_command="curl -s --location --request PUT 'https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID' \
     --header 'Content-Type: application/json' \
     --header 'Authorization: Bearer $TOKEN' \
     --data-raw '{
@@ -137,9 +204,18 @@ main() {
       # 保存当前IP地址和域名到JSON文件
       write_data "$IP" "$DOMAIN"
     else
-      local errors=$(echo "$response" | jq -r '.errors[]')
-      local log_message="[$current_time] Modification failed. Errors: $errors"
-      write_log "$log_message"
+      local error_code=$(echo "$response" | jq -r '.errors[0].code')
+      local error_message=$(echo "$response" | jq -r '.errors[0].message')
+
+      # 检查是否是"An identical record already exists."错误，如果是则忽略
+      if [ "$error_code" == "81058" ] || [ "$error_message" == "An identical record already exists." ]; then
+        echo "[$current_time] No modification needed. Record already exists with the same content."
+        write_data "$IP" "$DOMAIN"
+      else
+        local errors=$(echo "$response" | jq -r '.errors[]')
+        local log_message="[$current_time] Modification failed. Errors: $errors"
+        write_log "$log_message \n ip:$IP"
+      fi
     fi
   fi
 
