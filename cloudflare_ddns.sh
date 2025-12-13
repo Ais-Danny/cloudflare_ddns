@@ -1,22 +1,48 @@
 #!/bin/bash
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# 配置部分 - 只需要设置这些参数
-TOKEN="xxxxxxxx"
-DOMAIN="xx.xxx.com"
-NETWORK_INTERFACE=""  # 网卡名称，不指定则使用系统默认路由
-CDN_PROXIED=false # 是否开启小黄云cdn加速
-TYPE="AAAA"  # ip类型(A/AAAA)
+# 配置文件路径
+CONFIG_FILE="$SCRIPT_DIR/config.json"
 
 # 其他配置（无需修改）
 LOG_DIR="$SCRIPT_DIR/log"
 NOW_IP_FILE="$SCRIPT_DIR/data.json"
 DAYS_TO_KEEP=7
 
+# 读取配置文件
+read_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        TOKEN=$(jq -r '.TOKEN' "$CONFIG_FILE")
+        DOMAIN=$(jq -r '.DOMAIN' "$CONFIG_FILE")
+        NETWORK_INTERFACE=$(jq -r '.NETWORK_INTERFACE' "$CONFIG_FILE")
+        CDN_PROXIED=$(jq -r '.CDN_PROXIED' "$CONFIG_FILE")
+        TYPE=$(jq -r '.TYPE' "$CONFIG_FILE")
+    else
+        create_config
+        read_config
+    fi
+}
+
+# 创建配置文件
+create_config() {
+    cat > "$CONFIG_FILE" << EOF
+{
+    "TOKEN": "xxxx",
+    "DOMAIN": "xxx.xxx.com",
+    "NETWORK_INTERFACE": "",
+    "CDN_PROXIED": false,
+    "TYPE": "AAAA"
+}
+EOF
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] [INFO] Created config file: $CONFIG_FILE"
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] [INFO] Please modify the parameters in the configuration file as needed"
+}
+
 # 自动获取的参数
 ZONE_ID=""  # 将通过API自动获取
 RECORD_ID=""  # 将通过API自动获取
 
+exec 3>&1
 # 创建日志目录
 create_log_directory() {
   if [ ! -d "$LOG_DIR" ]; then
@@ -34,7 +60,7 @@ create_log_file() {
 write_log() {
   local log_message="$1"
   echo -e "$log_message" >> "$LOG_FILE"
-  echo -e "$log_message"
+  echo -e "$log_message" >&3
 }
 # 获取当前IP地址
 get_current_ip() {
@@ -54,7 +80,7 @@ get_current_ip() {
   fi
 
   local ip=$($ip_command)
-
+  
   # 验证IP地址格式
   if [ "$TYPE" == "A" ]; then
     # 验证IPv4地址
@@ -88,28 +114,34 @@ get_zone_id() {
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json")
   local zone_id=$(echo "$response" | jq -r ".result[] | select(.name == \"$root_domain\" or .name == \"$DOMAIN\") | .id")
-
+  
   if [ -z "$zone_id" ]; then
     write_log "Error: Could not find Zone ID for domain $DOMAIN"
     exit 1
   fi
-
+  
   echo "$zone_id"
 }
 
 # 获取域名记录ID
 get_record_id() {
   local zone_id="$1"
-  local response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records" \
+  local response=$(curl -s -G "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     --data-urlencode "name=$DOMAIN" \
     --data-urlencode "type=$TYPE")
+  # 检查API请求是否成功
+  local success=$(echo "$response" | jq -r ".success")
+  if [ "$success" != "true" ]; then
+    local errors=$(echo "$response" | jq -r ".errors[]")
+    write_log "Error: Failed to query DNS records for $DOMAIN (type: $TYPE). Errors: $errors"
+    return 1
+  fi
   local record_id=$(echo "$response" | jq -r ".result[0].id")
-
   if [ -z "$record_id" ] || [ "$record_id" == "null" ]; then
-    write_log "Error: Could not find DNS record for $DOMAIN (type: $TYPE)"
-    exit 1
+    write_log "Warning: Could not find DNS record for $DOMAIN (type: $TYPE);Will be created automatically;"
+    #return 0
   fi
   echo "$record_id"
 }
@@ -155,12 +187,17 @@ get_cloudflare_params() {
   ZONE_ID=$(get_zone_id)
   echo "Successfully obtained ZONE_ID: $ZONE_ID"
   # 使用ZONE_ID获取RECORD_ID
-  RECORD_ID=$(get_record_id "$ZONE_ID")
+  if ! RECORD_ID=$(get_record_id "$ZONE_ID"); then
+    exit 1
+  fi
   echo "Successfully obtained RECORD_ID: $RECORD_ID"
 }
 
 # 执行一次主要功能
 main() {
+  # 读取配置文件
+  read_config
+  
   create_log_directory
 
   if ! IP=$(get_current_ip); then
@@ -177,9 +214,15 @@ main() {
     create_log_file
     # 获取Cloudflare参数
     get_cloudflare_params
-
+    
+    local ACTION_METHOD="PUT"
+    local ACTION_URL="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID"
+    if [ -z "$RECORD_ID" ] || [ "$RECORD_ID" == "null" ]; then
+        ACTION_METHOD="POST"
+        ACTION_URL="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records"
+    fi
     # 构建curl命令
-    local curl_command="curl -s --location --request PUT 'https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID' \
+    local curl_command="curl -s --location --request $ACTION_METHOD $ACTION_URL \
     --header 'Content-Type: application/json' \
     --header 'Authorization: Bearer $TOKEN' \
     --data-raw '{
@@ -206,7 +249,7 @@ main() {
     else
       local error_code=$(echo "$response" | jq -r '.errors[0].code')
       local error_message=$(echo "$response" | jq -r '.errors[0].message')
-
+      
       # 检查是否是"An identical record already exists."错误，如果是则忽略
       if [ "$error_code" == "81058" ] || [ "$error_message" == "An identical record already exists." ]; then
         echo "[$current_time] No modification needed. Record already exists with the same content."

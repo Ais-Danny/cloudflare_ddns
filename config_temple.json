@@ -1,0 +1,7 @@
+{
+    "TOKEN": "xxx",
+    "DOMAIN": "xxx.xxx.com",
+    "NETWORK_INTERFACE": "",
+    "CDN_PROXIED": false,
+    "TYPE": "AAAA"
+}
